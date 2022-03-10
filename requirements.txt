@@ -1,0 +1,2 @@
+pony~=0.7.16
+instagrapi~=1.16.14

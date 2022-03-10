@@ -1,0 +1,6 @@
+/config.py
+/inst/
+/.idea
+/.git
+/venv/
+/db.sqlite
