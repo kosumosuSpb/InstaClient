@@ -13,21 +13,18 @@ class User(db.Entity):
     full_name = Optional(str)
     is_private = Optional(bool)
     is_verified = Optional(bool)
+    follower_count = Optional(int)
+    following_count = Optional(int)
+    public_email = Optional(str)
+    contact_phone_number = Optional(str)
     media_count = Optional(int)
     biography = Optional(str)
     is_business = Optional(bool)
+    external_url = Optional(str)
     upd_datetime = Required(datetime, default=lambda: datetime.utcnow())
     relationships_snaps = Set('RelationshipsSnap', reverse='owner')
     in_followers_snaps = Set('RelationshipsSnap', reverse='followers')
     in_following_snaps = Set('RelationshipsSnap', reverse='followings')
-
-    @property
-    def follower_count(self):
-        return
-
-    @property
-    def following_count(self):
-        return
 
 
 class RelationshipsSnap(db.Entity):
