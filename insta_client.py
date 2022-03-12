@@ -181,7 +181,7 @@ class InstaClient(Client):
             None
         )
 
-    def save_followers(self, user=None):
+    def save_followers_txt(self, user=None):
         """Сохранение id подписчиков в файл"""
         user_id = self._get_correct_user_id(user)
 
@@ -203,10 +203,10 @@ class InstaClient(Client):
 
     def snap_to_txt(self, user, users, relation_type='followers'):
         """Сохранение снапа в txt"""
-        if relation_type in ('followers', 'followings'):
+        if relation_type not in ('followers', 'followings'):
             logger.warning(f'Неправильно указан relation_type! Должен быть либо followers, либо followings! '
                            f'Указан - {relation_type}')
-            return
+            raise AttributeError('Неправильно указан relation_type!')
 
         # проверяем наличие папки под файлы, если нету - создаём
         if not os.path.isdir('inst'):
@@ -295,7 +295,7 @@ class InstaClient(Client):
         """Снимает дамп подписчиков, Возвращает изменения с последнего дампа"""
         user = self._get_correct_user_id(user)
 
-        if self.save_followers(user):
+        if self.save_followers_txt(user):
             return self.followers_changes(user)
 
     def txt_to_db_snap(self, user: str, file: str = 'last', relation_type: str = 'followers'):
