@@ -8,7 +8,7 @@ db.bind(provider='sqlite', filename='db.sqlite', create_db=True)
 
 
 class User(db.Entity):
-    id = PrimaryKey(int, auto=True)
+    id = PrimaryKey(int, auto=True, size=64)
     username = Optional(str)
     full_name = Optional(str)
     is_private = Optional(bool)

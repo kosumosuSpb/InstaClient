@@ -58,7 +58,7 @@ https://www.instagram.com/{username}/?__a=1
 """
 
 from instagrapi import Client, exceptions
-from config import INST_LOGIN, INST_PASS
+from config import INST_LOGIN, INST_PASS, PROXY
 from datetime import datetime  # импортируется вместе с моделями
 from models import *
 import logging
@@ -88,7 +88,7 @@ class InstaClient(Client):
     )
 
     @staticmethod
-    def create_and_login(login=INST_LOGIN, password=INST_PASS):
+    def create_and_login(login=INST_LOGIN, password=INST_PASS, proxy=PROXY):
         """Возвращает залогиненый объект класса"""
         instance = InstaClient()
         if instance.login(login, password):
@@ -129,6 +129,16 @@ class InstaClient(Client):
     @db_session
     def create_user_model(self, user_id: int or str, usershort: dict):
         """Фильтрует UserShort, создаёт экземпляр пользователя, сохраняет в БД и возвращает его"""
+        # если пришёл не словарь, то пытаемся сделать из него словарь
+        if not isinstance(usershort, dict):
+            try:
+                logger.warning('Должен был придти словарь, а пришло что-то другое! Пытаемся сделать словарь...')
+                usershort = usershort.__dict__
+            except Exception as e:
+                logger.error('Не удалось сделать словарь!')
+                logger.error(f'Ошибка! Подробности: {e}')
+                raise
+
         user_id = int(user_id)
         user = User.get(id=user_id)
 
@@ -140,7 +150,7 @@ class InstaClient(Client):
             logger.debug(f'Пользователь в БД не найден, создаём его...')
             # фильтруем UserShort, т.к. нам нужны не все поля
             logger.debug(f'Фильтруем атрибуты пользователя {user_id}')
-            usershort = {key: val for key, val in usershort.items() if key in self.FIELDS}
+            usershort = {key: val for key, val in usershort.items() if key in self.FIELDS and val}
 
             # создаём пользователя в БД
             user = User(id=user_id, **usershort)
@@ -148,13 +158,20 @@ class InstaClient(Client):
             return user
 
     def users_to_db(self, users: dict):
-        """Сохранение юзеров в БД и возврат сета юзеров"""
+        """
+        Сохранение юзеров в БД и возврат сета юзеров
+
+        Принимает формат: {'123456789': UserShort( ... )}
+
+        :param users:
+        :return:
+        """
         users_set = set()
 
         for user_id, usershort in users.items():
             user = self.create_user_model(user_id, usershort.__dict__) if usershort \
                 else self.create_user_model(user_id, {})  # костыль для случая, когда в usershort оказался None
-            users_set.add(user)  # возможно, лучше сохранить id, а не объекты?
+            users_set.add(user.id)  # сохраняем id, потому что пони не умеет передавать объекты в разных db_session
 
         return users_set
 
@@ -170,18 +187,33 @@ class InstaClient(Client):
         :param snap_owner: владелец снимка (чьи это подписчики/подписки)
         :param users_set1: список пользователей
         :param users_set2: список пользователей 2 (на случай, если добавляются сразу и подписчики и подписки)
-                          сначала подписчики, потом подписки
+                           сначала подписчики, потом подписки
         :param relation_type: возможные варианты: 'followers', 'following', 'all'
         :return:
         """
+        snap_owner = self._get_correct_user_id(snap_owner)
+        logger.info(f'Пользователь id = {snap_owner}. Достаём его из БД или создаём...')
+        snap_owner = User.get(id=snap_owner) or self.get_user_and_create(snap_owner)
+        users_set1 = {User[user_id] for user_id in users_set1}
+        users_set2 = {User[user_id] for user_id in users_set2} if users_set2 else None
+
         return (
             RelationshipsSnap(owner=snap_owner, followers=users_set1) if relation_type == 'followers' else
             RelationshipsSnap(owner=snap_owner, followings=users_set1) if relation_type == 'followings' else
-            RelationshipsSnap(owner=snap_owner, followers=users_set1, followings=users_set2) if relation_type == 'all' else
-            None
+            RelationshipsSnap(owner=snap_owner, followers=users_set1, followings=users_set2) if relation_type == 'all'
+            else None
         )
 
-    def save_followers_txt(self, user=None):
+    def get_user_and_create(self, user):
+        """Принимает юзернейм, запрашивает инфу, создаёт юзера в БД"""
+        user = self._get_correct_user_id(user)
+        logger.info('Создаём пользователя: забираем инфу из инсты...')
+        user = self.user_info(user)
+        logger.info('Создаём пользователя: сохраняем в БД...')
+        user = self.create_user_model(int(user.pk), user.__dict__)
+        return user
+
+    def save_followers(self, user=None, mode='db'):
         """Сохранение id подписчиков в файл"""
         user_id = self._get_correct_user_id(user)
 
@@ -199,9 +231,20 @@ class InstaClient(Client):
                 logger.warning('Логин не выполнен, поэтому нельзя было получить подписчиков!')
             return
 
-        self.snap_to_txt(user, followers, relation_type='followers')
+        if mode == 'txt':
+            logger.info('Сохраняем подписчиков пользователя в txt...')
+            followers_snap = self.snap_to_txt(user, followers, relation_type='followers')
+            logger.info(f'Снимок сохранён в файл {followers_snap}')
+        elif mode == 'db':
+            logger.info('Сохраняем подписчиков пользователя в БД...')
+            users_id = self.users_to_db(followers)
 
-    def snap_to_txt(self, user, users, relation_type='followers'):
+            logger.info('Создаём снимок подписчиков...')
+            followers_snap = self.make_relations_snap(snap_owner=user_id, users_set1=users_id, relation_type='followers')
+            logger.info(f'Снимок сохранён, id = {followers_snap.id}')
+
+    @staticmethod
+    def snap_to_txt(user, users, relation_type='followers'):
         """Сохранение снапа в txt"""
         if relation_type not in ('followers', 'followings'):
             logger.warning(f'Неправильно указан relation_type! Должен быть либо followers, либо followings! '
@@ -217,16 +260,17 @@ class InstaClient(Client):
         # сохраняем только ключи, так что у нас останутся только id пользователей
         now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         counter = 0
-        with open(f'inst/{user}_{relation_type}_{now}.txt', 'w+') as f:
+        filename = f'{user}_{relation_type}_{now}.txt'
+        with open(f'inst/{filename}', 'w+') as f:
             for s in users:
                 f.write(s+'\n')
                 counter += 1
 
         logger.info(f'Сохранено {counter} пользователей')
 
-        return True
+        return filename
 
-    def followers_changes(self, user, show_id=False):
+    def followers_changes_from_txt(self, user, show_id=False):
         """Сравнить последний и предпоследний файлы и показать разницу"""
         # получаем список файлов в папке inst
         files = os.listdir(path="./inst")
@@ -295,8 +339,8 @@ class InstaClient(Client):
         """Снимает дамп подписчиков, Возвращает изменения с последнего дампа"""
         user = self._get_correct_user_id(user)
 
-        if self.save_followers_txt(user):
-            return self.followers_changes(user)
+        if self.save_followers(user):
+            return self.followers_changes_from_txt(user)
 
     def txt_to_db_snap(self, user: str, file: str = 'last', relation_type: str = 'followers'):
         """
@@ -320,7 +364,7 @@ class InstaClient(Client):
             # получаем список файлов в папке inst
             files = os.listdir(path="./inst")
             files = sorted([file for file in files
-                            if file[:len(user)] == user] and relation_type in file)  # берём только нужный юзернейм и сортируем
+                            if file[:len(user)] == user and relation_type in file])  # берём только нужный юзернейм и сортируем
             file = files[-1]  # берём последний в списке, он же последний по дате (т.к. в имени файла содержится дата)
         else:
             # костыль, чтобы не конфликтовало с тем, что в имени файла
@@ -339,16 +383,19 @@ class InstaClient(Client):
 
         users_dict = {}
 
-        logger.info('Запрашиваем краткую инфу о пользователях...')
+        logger.info(f'Собрано {len(users)} id пользователей')
+        logger.info('Запрашиваем инфу о пользователях...')
         # запрашиваем UserShorts, собираем словарь вида:
         # {'987654321': UserShort(pk='123456789', username='user_name', full_name='Имя', ... ), ... }
         # можно вместо user_short_gql использовать user_info, но объём данных будет больше
         # и процесс будет медленнее
         for user_id in users:
             try:
-                usershort = self.user_short_gql(user_id)
-            except exceptions.ClientError:
+                usershort = self.user_short_gql(user_id)  # быстро перестаёт получать инфу и даёт её очень мало
+                # usershort = self.user_info(user_id)  # очень медленно
+            except exceptions.ClientError as e:
                 logger.error(f'Ошибка! Не удалось получить пользователя {user_id}')
+                logger.error(f'Подробности: {e}')
                 usershort = None
 
             users_dict[user_id] = usershort
