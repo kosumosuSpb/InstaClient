@@ -4,3 +4,4 @@
 /.git
 /venv/
 /db.sqlite
+/db.sqlite-journal
