@@ -52,11 +52,10 @@ class DBChanges:
     def __init__(self, db_name: str):
         self.db = db_name
         self.conn = sqlite3.connect(self.db)
+        # self.conn = sqlite3.connect(:memory:)  # если БД в памяти
 
     def add_columns(self, table: str, column: str, col_type, default, null: bool, db_type='sqLite'):
         """Добавление колонки в таблицу"""
-        # conn = sqlite3.connect(:memory:)  # если БД в памяти
-
         cur = self.conn.cursor()
         cur.execute(f"ALTER TABLE {table} ADD column {column} {col_type} DEFAULT {default}")
         self.conn.commit()
