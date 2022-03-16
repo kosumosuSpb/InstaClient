@@ -25,37 +25,43 @@
 <li>- логи в файлах</li>
 </ul>
 
-<p>название ещё не придумал:</p>
+# Как пользоваться
 
-* InstaClient - рабочее
-* InstaGrappa ?
-* InstaGrappi -
-* InstagrYappi -
-* Instalker -
-* InstSpector
-* InstMon
-* Instrack -
-* InStat
+<p>Кратенько</p>
+<p>пока всё заточено под локальную работу, но уже умеет сохранять в БД (пока тестил только sqLite) </p>
 
-пока всё заточено под локальную работу, но уже умеет сохранять в БД (пока тестил только sqLite) 
+<p>Базируется на instagrapi, поэтому доступны все те же методы + методы расширения
+<a href="https://github.com/adw0rd/instagrapi" target="_blank">https://github.com/adw0rd/instagrapi</a></p>
 
-Базируется на instagrapi
-https://github.com/adw0rd/instagrapi
-
-для начала работы необходимо залогиниться 
-(также в instagrapi есть возможность работы через прокси 
-и с двухфакторной авторизацией, но здесь простой пример):
+<p>для начала работы необходимо залогиниться 
+(также в instagrapi есть возможность работы через прокси и с двухфакторной авторизацией, но здесь простой пример):</p>
 
 `inst = InstaClient()`</br>
 `inst.login(login, password)`
 
-либо для ленивых (если в конфиге прописаны `INST_LOGIN` и `INST_PASS`):
+<p>Для ленивых (если в конфиге прописаны `INST_LOGIN` и `INST_PASS`):</p>
 
 <code>inst = InstaClient.create_and_login()</code>
 
-если не указать логин и пароль, то по-умолчанию ищет их в константах INST_LOGIN и INST_PASS
-файлы дампа txt сохраняет в папку `./inst` (если её нет, то создаёт)
-конфиги ищет в `config.py`
+<p>если не указать логин и пароль, то по-умолчанию ищет их в константах INST_LOGIN и INST_PASS</p>
+<p>файлы дампа txt сохраняет в папку `./inst` (если её нет, то создаёт)</p>
+<p>конфиги ищет в `config.py`, описание его чуть ниже</p>
+
+<p>Снять снап подписчиков пользователя user и сохранить в БД: </p>
+
+`inst.save_followers(user)`
+
+<p>Снять снап подписчиков пользователя user и сохранить в txt: </p>
+
+`inst.save_followers(user=user, mode='txt')`
+
+<p>Сравнить два последних снапа подписчиков пользователя user из БД:</p>
+
+`inst.followers_changes_db(user)`
+
+<p>Сравнить два последних снапа подписчиков пользователя user из txt:</p>
+
+`inst.followers_changes_txt(user)`
 
 ### формат конфига примитивный:
 
@@ -69,8 +75,21 @@ https://github.com/adw0rd/instagrapi
 <code># Support socks and http/https proxy “scheme://username:password@host:port”.</code></br>
 <code>PROXY = ''</code></br>
 
-Чтобы менять настройки подключения к БД сейчас пока что нужно изменить строку в файле `models.py`, но потом будет вынесено тоже в конфиг:
+<p>Чтобы менять настройки подключения к БД сейчас пока что нужно изменить строку в файле `models.py`, но потом будет вынесено тоже в конфиг:</p>
 
 `db.bind(provider='sqlite', filename='db.sqlite', create_db=True)`
 
-ЗЫ: маниакально старался не использовать re, но возможно, что зря
+<p>ЗЫ: маниакально старался не использовать re, но возможно, что зря</p>
+
+<p>название ещё не придумал:</p>
+
+* InstaClient - рабочее
+* InstaGrappa ?
+* InstaGrappi -
+* InstagrYappi -
+* Instalker -
+* InstSpector
+* InstMon
+* Instrack -
+* InStat
+
