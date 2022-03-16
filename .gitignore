@@ -3,5 +3,6 @@
 /.idea
 /.git
 /venv/
-/db.sqlite
+/*.sqlite
 /db.sqlite-journal
+

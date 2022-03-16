@@ -16,8 +16,8 @@ https://www.instagram.com/{username}/?__a=1
 from instagrapi import Client, exceptions
 from config import INST_LOGIN, INST_PASS, PROXY
 from datetime import datetime  # импортируется вместе с моделями
-from pony.orm import desc
-from pony.orm.core import ObjectNotFound
+from pony.orm import desc  # импортируется вместе с моделями
+from pony.orm.core import ObjectNotFound  # импортируется вместе с моделями
 from models import *
 import logging
 import os
@@ -28,8 +28,9 @@ logger = logging.getLogger('InstaClient')
 
 
 class InstaClient(Client):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, update=False, **kwargs):
         super().__init__(**kwargs)
+        self.update = update
 
     FIELDS = (
         'username',
@@ -82,7 +83,7 @@ class InstaClient(Client):
         else:
             try:
                 logger.info(f'Получаем id пользователя {user}...')
-                user_id = self.user_id_from_username(user)
+                user_id = User.get(username=user).id or self.user_id_from_username(user)
             except exceptions.ClientError:
                 logger.error(f'Ошибка! Что-то с запросом. Возможно, не верно указан пользователь: {user}')
                 raise
@@ -106,7 +107,12 @@ class InstaClient(Client):
 
         if user:
             logger.debug(f'Пользователь найден в БД')
-            # можно добавить обновление пользователя из usershort
+
+            # если установлен флаг update, то обновляем пользователя
+            logger.debug('Установлен флаг update, обновляем пользователя в БД...')
+            usershort = {key: val for key, val in usershort.items() if key in self.FIELDS and val}
+            user.set(**usershort)
+
             return user
         else:
             logger.debug(f'Пользователь в БД не найден, создаём его...')
@@ -125,8 +131,8 @@ class InstaClient(Client):
 
         Принимает формат: {'123456789': UserShort( ... )}
 
-        :param users:
-        :return:
+        :param users: Словарь с пользователями {'123456789': UserShort( ... )}
+        :return: множество с пользователями
         """
         users_set = set()
 
@@ -138,6 +144,24 @@ class InstaClient(Client):
             users_set.add(user.id)  # сохраняем id, потому что пони не умеет передавать объекты в разных db_session
 
         return users_set
+
+    @db_session
+    def update_user(self, user, fullinfo=False):
+        """Обновление пользователя в БД"""
+        user_id = self._get_correct_user_id(user)
+
+        # получаем пользователя из БД
+        db_user = User.get(id=user_id)
+
+        # получаем инфу пользователя у инсты
+        # придёт или User или UserShort
+        upd_user = self.user_short_gql(user_id) if not fullinfo else self.user_info(user_id)
+        upd_user = upd_user.__dict__
+
+        # обновляем пользователя в БД
+        upd_user = {key: val for key, val in upd_user.items() if key in self.FIELDS and val}
+        db_user.set(**upd_user)
+
 
     @db_session
     def make_relations_snap(self, snap_owner, users_set1, users_set2=None, relation_type='followers'):
@@ -184,9 +208,12 @@ class InstaClient(Client):
         user = self.create_user_model(int(user.pk), user.__dict__)
         return user
 
-    def save_followers(self, user=None, mode='db'):
+    def save_followers(self, user=None, mode='db', update=False):
         """Сохранение id подписчиков в файл"""
         user_id = self._get_correct_user_id(user)
+
+        # обновлять пользователей в БД?
+        self.update = update
 
         # получаем список подписчиков
         # придёт словарь с полной инфой о подписчиках вида
@@ -354,13 +381,6 @@ class InstaClient(Client):
 
     def find_mutual_followers(self, user1, user2, using_db=True):
         """Находит общих подписчиков между двумя пользователями"""
-
-    def check_followers_changes(self, user=None):
-        """Снимает дамп подписчиков, Возвращает изменения с последнего дампа"""
-        user = self._get_correct_user_id(user)
-
-        if self.save_followers(user):
-            return self.followers_changes_txt(user)
 
     def txt_to_db_snap(self, user: str, file: str = 'last', relation_type: str = 'followers'):
         """

@@ -25,6 +25,14 @@ class User(db.Entity):
     relationships_snaps = Set('RelationshipsSnap', reverse='owner')
     in_followers_snaps = Set('RelationshipsSnap', reverse='followers')
     in_following_snaps = Set('RelationshipsSnap', reverse='followings')
+    # is_deleted = Optional(bool)
+
+    @property
+    def followers(self):
+        """Возвращает подписчиков из последнего снапа"""
+        # берём самый новый снап
+        last_snap = self.relationships_snaps.select().order_by(lambda rs: desc(rs.date_time)).first()
+        return last_snap.followers.select().fetch() if last_snap else None
 
 
 class RelationshipsSnap(db.Entity):
@@ -36,3 +44,13 @@ class RelationshipsSnap(db.Entity):
 
 
 db.generate_mapping(create_tables=True)
+
+
+class DBChanges:
+    """Костыль для Pony ORM, позволяющий добавлять и удалять колонки в таблицах, т.к. в ней нет миграций"""
+    def add_columns(self, table: str, column: str, data_type, default, null: bool) -> bool:
+        pass
+
+    def delete_columns(self, table, column):
+        pass
+
