@@ -1,5 +1,6 @@
 from datetime import datetime
 from pony.orm import *
+import sqlite3
 
 
 db = Database()
@@ -25,7 +26,7 @@ class User(db.Entity):
     relationships_snaps = Set('RelationshipsSnap', reverse='owner')
     in_followers_snaps = Set('RelationshipsSnap', reverse='followers')
     in_following_snaps = Set('RelationshipsSnap', reverse='followings')
-    # is_deleted = Optional(bool)
+    is_deleted = Optional(bool)
 
     @property
     def followers(self):
@@ -48,9 +49,19 @@ db.generate_mapping(create_tables=True)
 
 class DBChanges:
     """Костыль для Pony ORM, позволяющий добавлять и удалять колонки в таблицах, т.к. в ней нет миграций"""
-    def add_columns(self, table: str, column: str, data_type, default, null: bool) -> bool:
-        pass
+    def __init__(self, db_name: str):
+        self.db = db_name
+        self.conn = sqlite3.connect(self.db)
+
+    def add_columns(self, table: str, column: str, col_type, default, null: bool, db_type='sqLite'):
+        """Добавление колонки в таблицу"""
+        # conn = sqlite3.connect(:memory:)  # если БД в памяти
+
+        cur = self.conn.cursor()
+        cur.execute(f"ALTER TABLE {table} ADD column {column} {col_type} DEFAULT {default}")
+        self.conn.commit()
 
     def delete_columns(self, table, column):
+        """Удаление колонки из таблицы"""
         pass
 

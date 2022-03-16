@@ -83,7 +83,8 @@ class InstaClient(Client):
         else:
             try:
                 logger.info(f'Получаем id пользователя {user}...')
-                user_id = User.get(username=user).id or self.user_id_from_username(user)
+                db_user = User.get(username=user)
+                user_id = db_user.id if db_user else self.user_id_from_username(user)
             except exceptions.ClientError:
                 logger.error(f'Ошибка! Что-то с запросом. Возможно, не верно указан пользователь: {user}')
                 raise
