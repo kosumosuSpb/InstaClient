@@ -1,5 +1,5 @@
 """
-Обёртка для instagrapi, сделана для расширения функционала,
+Обёртка для instabot, сделана для расширения функционала,
 например, отслеживания того, кто подписался и отписался за какой-то период.
 
 Всё кое-как описано в README.md
@@ -13,8 +13,9 @@ https://www.instagram.com/{username}/?__a=1
 маниакально старался не использовать re, но возможно, что зря
 """
 
-from instagrapi import Client, exceptions
-from config import INST_LOGIN, INST_PASS, PROXY
+from instabot import Bot
+import requests
+from config import INST_LOGIN, INST_PASS, INST_USERNAME, PROXY
 from datetime import datetime  # импортируется вместе с моделями
 from pony.orm import desc  # импортируется вместе с моделями
 from pony.orm.core import ObjectNotFound  # импортируется вместе с моделями
@@ -23,11 +24,15 @@ import logging
 import os
 
 
-logging.basicConfig(level=logging.INFO)
+class LoginRequired(Exception):
+    pass
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('InstaClient')
 
 
-class InstaClient(Client):
+class InstaClient(Bot):
     def __init__(self, *args, update=False, **kwargs):
         super().__init__(**kwargs)
         self.update = update
@@ -47,35 +52,35 @@ class InstaClient(Client):
     )
 
     @staticmethod
-    def create_and_login(login=INST_LOGIN, password=INST_PASS, proxy=None):
+    def create_and_login(username=INST_USERNAME, password=INST_PASS, proxy=None):
         """Возвращает залогиненый объект класса"""
         instance = InstaClient()
 
         if proxy:
-            instance.set_proxy(proxy)
+            pass
 
-        if instance.login(login, password):
+        if instance.login(username=username, password=password):
             # Если логин прошёл успешно, то пишем в лог про это и возвращаем объект
-            logger.info(f'Пользователь {login} авторизован успешно. Имя пользователя - {instance.username}')
+            logger.info(f'Пользователь {username} авторизован успешно. Имя пользователя - {instance.username}')
             return instance
         else:
-            logger.info(f'Авторизовать пользователя {login} не удалось')
+            logger.info(f'Авторизовать пользователя {username} не удалось')
 
     def _get_correct_user_id(self, user) -> int:
         """Получает пользователя, возвращает его id"""
         # если не указан логин, то берём логин из объекта
         if not user:
             # проверка авторизованности
-            if self.username:
+            if self.user_id:
                 logger.info(f'Не указан пользователь, берём его из объекта...')
                 user_id = self.user_id
             # если не авторизован, то кидаем исключение
             else:
                 logger.warning('Не указан пользователь и не выполнена авторизация!')
-                raise exceptions.ClientLoginRequired('Надо залогиниться!')
+                raise LoginRequired('Надо залогиниться!')
 
         # если указан id
-        elif (isinstance(user, str) and user.isdigit()) or isinstance(user, int):
+        elif isinstance(user, int) or (isinstance(user, str) and user.isdigit()):
             logger.debug('Указан user_id, используем его')
             user_id = user
 
@@ -84,88 +89,75 @@ class InstaClient(Client):
             try:
                 logger.info(f'Получаем id пользователя {user}...')
                 db_user = User.get(username=user)
-                user_id = db_user.id if db_user else self.user_id_from_username(user)
-            except exceptions.ClientError:
+                user_id = db_user.id if db_user else self.get_user_id_from_username(user)
+            except Exception:
                 logger.error(f'Ошибка! Что-то с запросом. Возможно, не верно указан пользователь: {user}')
                 raise
         return int(user_id)
 
-    @db_session
-    def create_user_model(self, user_id: int or str, usershort: dict):
-        """Фильтрует UserShort, создаёт экземпляр пользователя, сохраняет в БД и возвращает его"""
-        # если пришёл не словарь, то пытаемся сделать из него словарь
-        if not isinstance(usershort, dict):
-            try:
-                logger.warning('Должен был придти словарь, а пришло что-то другое! Пытаемся сделать словарь...')
-                usershort = usershort.__dict__
-            except Exception as e:
-                logger.error('Не удалось сделать словарь!')
-                logger.error(f'Ошибка! Подробности: {e}')
-                raise
+    def get_userinfo(self, user) -> dict:
+        """Выдаёт инфу пользователя"""
+        user_id = self._get_correct_user_id(user)
+        username = User.get(id=user_id).username or self.get_username_from_user_id(user_id)
 
+        # запрашиваем джейсон по пользователю
+        responce = requests.get(f'https://www.instagram.com/{username}/?__a=1')
+        userinfo = responce.json()['graphql']['user']
+
+        # фильтруем лишнее и делаем словарь
+        userinfo = {key: val for key, val in userinfo.items() if key in self.FIELDS and val}
+        userinfo['id'] = int(user_id)  # добавляем id
+        return userinfo
+
+    @db_session
+    def create_user_model(self, user_id, **kwargs):
+        """Создаёт экземпляр пользователя, сохраняет в БД и возвращает его"""
         user_id = int(user_id)
-        user = User.get(id=user_id)
+        user = User.get(id=user_id)  # проверяем, нет ли его уже в БД
 
         if user:
             logger.debug(f'Пользователь найден в БД')
-
-            # если установлен флаг update, то обновляем пользователя
-            logger.debug('Установлен флаг update, обновляем пользователя в БД...')
-            usershort = {key: val for key, val in usershort.items() if key in self.FIELDS and val}
-            user.set(**usershort)
-
             return user
+
         else:
             logger.debug(f'Пользователь в БД не найден, создаём его...')
-            # фильтруем UserShort, т.к. нам нужны не все поля
-            logger.debug(f'Фильтруем атрибуты пользователя {user_id}')
-            usershort = {key: val for key, val in usershort.items() if key in self.FIELDS and val}
+
+            # фильтруем кварги, чтобы ничего лишнего не попало
+            kwargs = {key: val for key, val in kwargs if key in self.FIELDS and val}
 
             # создаём пользователя в БД
-            user = User(id=user_id, **usershort)
+            user = User(id=user_id, **kwargs)
             logger.debug(f'Пользователь {user} создан')
             return user
 
-    def users_to_db(self, users: dict) -> set:
+    def users_to_db(self, users: list, simple=True) -> set:
         """
         Сохранение юзеров в БД и возврат сета юзеров
 
-        Принимает формат: {'123456789': UserShort( ... )}
+        Принимает формат: ['123456789', '987654321', ]
 
-        :param users: Словарь с пользователями {'123456789': UserShort( ... )}
+        :param users: Список с id пользователей ['123456789', '987654321', ]
         :return: множество с пользователями
         """
         users_set = set()
 
-        for user_id, usershort in users.items():
-            if usershort:
-                user = self.create_user_model(user_id, usershort.__dict__)
-            else:
-                user = self.create_user_model(user_id, {})  # костыль для случая, когда usershort оказался None
-            users_set.add(user.id)  # сохраняем id, потому что пони не умеет передавать объекты в разных db_session
+        if not simple:
+            logger.info('Получаем юзернеймы...')
+            usernames = self.get_usernames(users)
+
+            for user_id, username in zip(users, usernames):
+                user = self.create_user_model(user_id, username=username)
+                users_set.add(user.id)  # сохраняем id, потому что пони не умеет передавать объекты в разных db_session
+
+        else:
+            for user_id in users:
+                user = self.create_user_model(user_id)
+                users_set.add(user.id)  # сохраняем id, потому что пони не умеет передавать объекты в разных db_session
 
         return users_set
 
     @db_session
-    def update_user(self, user, fullinfo=False):
-        """Обновление пользователя в БД"""
-        user_id = self._get_correct_user_id(user)
-
-        # получаем пользователя из БД
-        db_user = User.get(id=user_id)
-
-        # получаем инфу пользователя у инсты
-        # придёт или User или UserShort
-        upd_user = self.user_short_gql(user_id) if not fullinfo else self.user_info(user_id)
-        upd_user = upd_user.__dict__
-
-        # обновляем пользователя в БД
-        upd_user = {key: val for key, val in upd_user.items() if key in self.FIELDS and val}
-        db_user.set(**upd_user)
-
-
-    @db_session
-    def make_relations_snap(self, snap_owner, users_set1, users_set2=None, relation_type='followers'):
+    def make_relations_snap(self, snap_owner, users_set1: set, users_set2: set = None, relation_type='followers'):
         """
         Создание снимка связей пользователя snap_owner
 
@@ -202,25 +194,24 @@ class InstaClient(Client):
 
     def get_user_and_create(self, user):
         """Принимает юзернейм, запрашивает инфу, создаёт юзера в БД"""
-        user = self._get_correct_user_id(user)
+        user_id = self._get_correct_user_id(user)
         logger.info('Создаём пользователя: забираем инфу из инсты...')
-        user = self.user_info(user)  # user_info хочет str, но может принять и int, т.к. конвертит на входе стразу в str
+        user = self.get_userinfo(user_id)  # создаём словарь с данными пользователя
         logger.info('Создаём пользователя: сохраняем в БД...')
-        user = self.create_user_model(int(user.pk), user.__dict__)
+        user = self.create_user_model(int(user_id), user)
         return user
 
     def save_followers(self, user=None, mode='db', update=False):
-        """Сохранение id подписчиков в файл"""
+        """Сохранение id подписчиков в БД или в txt"""
         user_id = self._get_correct_user_id(user)
 
         # обновлять пользователей в БД?
         self.update = update
 
         # получаем список подписчиков
-        # придёт словарь с полной инфой о подписчиках вида
-        # {'987654321': UserShort(pk='123456789', username='user_name', full_name='Имя', ... ), ... }
+        # придёт список с id: ['123456789', '987654321', ]
         logger.info(f'Получаем подписчиков пользователя {user}...')
-        followers = self.user_followers(user_id)
+        followers = self.get_user_followers(user_id)
         logger.info(f'Получено {len(followers)} подписчиков')
 
         if not followers:
@@ -370,15 +361,12 @@ class InstaClient(Client):
 
         for user_id in user_ids:
             try:
-                usernames.append(self.username_from_user_id(user_id))
+                usernames.append(self.get_username_from_user_id(user_id))
             except Exception as e:
                 logger.warning(f'Пользователь {user_id} не найден! Вероятно, он был удалён')
                 logger.error(f'Ошибка! {e}')
                 usernames.append(f'ErrGetUsr({user_id})')
         return usernames
-
-    def take_file_dump(self):
-        """Принимает файл дампа подписчиков"""
 
     def find_mutual_followers(self, user1, user2, using_db=True):
         """Находит общих подписчиков между двумя пользователями"""
@@ -426,20 +414,11 @@ class InstaClient(Client):
 
         logger.info(f'Собрано {len(users)} id пользователей')
         logger.info('Запрашиваем инфу о пользователях...')
-        # запрашиваем UserShorts, собираем словарь вида:
-        # {'987654321': UserShort(pk='123456789', username='user_name', full_name='Имя', ... ), ... }
-        # можно вместо user_short_gql использовать user_info, но объём данных будет больше
-        # и процесс будет медленнее
-        for user_id in users:
-            try:
-                usershort = self.user_short_gql(user_id)  # быстро перестаёт получать инфу и даёт её очень мало
-                # usershort = self.user_info(user_id)  # очень медленно
-            except exceptions.ClientError as e:
-                logger.error(f'Ошибка! Не удалось получить пользователя {user_id}')
-                logger.error(f'Подробности: {e}')
-                usershort = None
 
-            users_dict[user_id] = usershort
+        # получаем юзернеймы
+        for user_id in users:
+            username = self.get_username_from_user_id(user_id)
+            users_dict[user_id] = username
 
         # сохраняем юзеров в БД, получаем обратно сет с ними
         # чтобы сохранить в снап
@@ -458,8 +437,8 @@ class InstaClient(Client):
         # проверяем, есть ли он в БД, если его нет создаём
         if not User.get(snap_owner):
             logger.info(f'Пользователя {user} в БД нет, создаём...')
-            usershort = self.user_short_gql(snap_owner)
-            self.create_user_model(snap_owner, usershort.__dict__)
+            username = self.get_userinfo(snap_owner)
+            self.create_user_model(snap_owner, username.__dict__)
 
         # сохраняем снап в БД
         logger.info('Сохраняем снап в БД...')
