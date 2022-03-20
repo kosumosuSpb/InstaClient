@@ -1,11 +1,12 @@
 from datetime import datetime
+from config import DB_SETTINGS
 from pony.orm import *
 import sqlite3
 
 
 db = Database()
 
-db.bind(provider='sqlite', filename='db.sqlite', create_db=True)
+db.bind(**DB_SETTINGS)
 
 
 class User(db.Entity):
@@ -33,8 +34,15 @@ class User(db.Entity):
     def followers(self):
         """Возвращает подписчиков из последнего снапа"""
         # берём самый новый снап
-        last_snap = self.relationships_snaps.select().order_by(lambda rs: desc(rs.date_time)).first()
+        last_snap = self.relationships_snaps.select(lambda rs: rs.followers).order_by(lambda rs: desc(rs.date_time)).first()
         return last_snap.followers.select().fetch() if last_snap else None
+
+    @property
+    def followings(self):
+        """Возвращает подписки из последнего снапа"""
+        # берём самый новый снап
+        last_snap = self.relationships_snaps.select(lambda rs: rs.followings).order_by(lambda rs: desc(rs.date_time)).first()
+        return last_snap.followings.select().fetch() if last_snap else None
 
     def before_update(self):
         """Сохраняет в отдельное поле старый юзернейм, если он изменился в обновлении"""

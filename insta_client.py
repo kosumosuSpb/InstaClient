@@ -24,7 +24,7 @@ import logging
 import os
 
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
 logger = logging.getLogger('InstaClient')
 
 
@@ -255,6 +255,31 @@ class InstaClient(Client):
             followers_snap = self.make_relations_snap(snap_owner=user_id, users_set1=users_id, relation_type='followers')
             logger.info(f'Снимок сохранён, id = {followers_snap.id}')
 
+    def save_followings(self, user=None, mode='db', update=False):
+        """Сохранение подписок"""
+        user_id = self._get_correct_user_id(user)
+
+        logger.info(f'Получаем подписки пользователя {user}...')
+        followings = self.user_following_v1(user_id)
+        logger.info(f'Получено {len(followings)} подписок, сохраняем...')
+
+        if not followings:
+            logger.info('Нечего сохранять')
+            return
+
+        if mode == 'db':
+            logger.info('Сохраняем подписки пользователя в БД...')
+            users_id = self.users_to_db(followings)
+
+            logger.info('Создаём снимок подписок...')
+            followings_snap = self.make_relations_snap(snap_owner=user_id, users_set1=users_id,
+                                                       relation_type='followings')
+            logger.info(f'Снимок сохранён, id = {followings_snap.id}')
+        elif mode == 'txt':
+            pass
+        else:
+            pass
+
     @staticmethod
     def snap_to_txt(user, users, relation_type='followers'):
         """Сохранение снапа в txt"""
@@ -285,7 +310,7 @@ class InstaClient(Client):
 
     @db_session
     def followers_changes_db(self, user, show_id=False):
-        """Сравнить два последних снапа в БД и показать разницу"""
+        """Сравнить два последних снапа подписчиков в БД и показать разницу"""
         user_id = self._get_correct_user_id(user)
         try:
             user = User[user_id]
@@ -376,6 +401,54 @@ class InstaClient(Client):
         return {
             'Подписались': new,
             'Отписались': gone
+        }
+
+    @db_session
+    def followings_changes_db(self, user, show_id=False):
+        """Сравнить два последних снапа подписок в БД и показать разницу"""
+        user_id = self._get_correct_user_id(user)
+        try:
+            user = User[user_id]
+        except ObjectNotFound:
+            logger.warning(f'Пользователь {user} не найден в БД!')
+            raise ObjectNotFound(f'Пользователь {user} не найден в БД!')
+
+        # отсортируем снапы, в которых есть подписки по дате и возьмём первые два - самые новые
+        query = RelationshipsSnap.select(
+            lambda rs: rs.followings and rs.owner == user
+        ).order_by(
+            lambda rs: desc(rs.date_time)
+        )[:2]
+
+        if len(query) == 2:
+            snap_new, snap_old = query
+        else:
+            logger.warning('Снапов меньше двух, нечего сравнивать!')
+            return
+
+        # вытаскиваем из снапов подписчиков
+        old_followings = snap_old.followings.select().fetch()
+        new_followings = snap_new.followings.select().fetch()
+
+        # получаем разницу
+        difference = set(new_followings).symmetric_difference(old_followings)
+
+        if not difference:
+            logger.info('Изменений в подписках нет')
+            return
+
+        # на эти юзер подписался (потому что их нет в старом снапе)
+        new = [following.username for following in difference if following not in old_followings]
+
+        # а от этих отписался, сам или его отписали (потому что их нет в новом)
+        gone = [following.username for following in difference if following not in new_followings]
+
+        logger.info(f'\nПодписался на: {", ".join(str(s) for s in new)}\n'
+                    f'Отписался от: {", ".join(str(s) for s in gone)}')
+
+        return {
+            'Подписался на': new,
+            'Отписался от': gone
         }
 
     def get_usernames(self, user_ids: list) -> list:
