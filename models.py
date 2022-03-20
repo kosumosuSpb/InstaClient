@@ -11,6 +11,7 @@ db.bind(provider='sqlite', filename='db.sqlite', create_db=True)
 class User(db.Entity):
     id = PrimaryKey(int, auto=True, size=64)
     username = Optional(str)
+    last_username = Optional(str)
     full_name = Optional(str)
     is_private = Optional(bool)
     is_verified = Optional(bool)
@@ -34,6 +35,13 @@ class User(db.Entity):
         # берём самый новый снап
         last_snap = self.relationships_snaps.select().order_by(lambda rs: desc(rs.date_time)).first()
         return last_snap.followers.select().fetch() if last_snap else None
+
+    def before_update(self):
+        """Сохраняет в отдельное поле старый юзернейм, если он изменился в обновлении"""
+        prev_username = self._dbvals_.get(User.username)
+        new_username = self.username
+        if prev_username != new_username:
+            self.last_username = prev_username
 
 
 class RelationshipsSnap(db.Entity):

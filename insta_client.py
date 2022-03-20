@@ -18,6 +18,7 @@ from config import INST_LOGIN, INST_PASS, PROXY
 from datetime import datetime  # импортируется вместе с моделями
 from pony.orm import desc  # импортируется вместе с моделями
 from pony.orm.core import ObjectNotFound  # импортируется вместе с моделями
+import requests
 from models import *
 import logging
 import os
@@ -61,7 +62,7 @@ class InstaClient(Client):
         else:
             logger.info(f'Авторизовать пользователя {login} не удалось')
 
-    def _get_correct_user_id(self, user) -> int:
+    def _get_correct_user_id(self, user):
         """Получает пользователя, возвращает его id"""
         # если не указан логин, то берём логин из объекта
         if not user:
@@ -88,10 +89,10 @@ class InstaClient(Client):
             except exceptions.ClientError:
                 logger.error(f'Ошибка! Что-то с запросом. Возможно, не верно указан пользователь: {user}')
                 raise
-        return int(user_id)
+        return user_id
 
     @db_session
-    def create_user_model(self, user_id: int or str, usershort: dict):
+    def create_user_model(self, usershort: dict) -> User:
         """Фильтрует UserShort, создаёт экземпляр пользователя, сохраняет в БД и возвращает его"""
         # если пришёл не словарь, то пытаемся сделать из него словарь
         if not isinstance(usershort, dict):
@@ -103,18 +104,19 @@ class InstaClient(Client):
                 logger.error(f'Ошибка! Подробности: {e}')
                 raise
 
-        user_id = int(user_id)
+        user_id = int(usershort['pk'])
         user = User.get(id=user_id)
 
         if user:
             logger.debug(f'Пользователь найден в БД')
 
             # если установлен флаг update, то обновляем пользователя
-            logger.debug('Установлен флаг update, обновляем пользователя в БД...')
-            usershort = {key: val for key, val in usershort.items() if key in self.FIELDS and val}
-            user.set(**usershort)
-
+            if self.update:
+                logger.debug('Установлен флаг update, обновляем пользователя в БД...')
+                usershort = {key: val for key, val in usershort.items() if key in self.FIELDS and val}
+                user.set(**usershort)
             return user
+
         else:
             logger.debug(f'Пользователь в БД не найден, создаём его...')
             # фильтруем UserShort, т.к. нам нужны не все поля
@@ -126,22 +128,19 @@ class InstaClient(Client):
             logger.debug(f'Пользователь {user} создан')
             return user
 
-    def users_to_db(self, users: dict) -> set:
+    def users_to_db(self, usershorts: list) -> set:
         """
         Сохранение юзеров в БД и возврат сета юзеров
 
-        Принимает формат: {'123456789': UserShort( ... )}
+        Принимает формат: [UserShort( ... ), ]
 
-        :param users: Словарь с пользователями {'123456789': UserShort( ... )}
+        :param usershorts: Список [UserShort( ... ), ]
         :return: множество с пользователями
         """
         users_set = set()
 
-        for user_id, usershort in users.items():
-            if usershort:
-                user = self.create_user_model(user_id, usershort.__dict__)
-            else:
-                user = self.create_user_model(user_id, {})  # костыль для случая, когда usershort оказался None
+        for usershort in usershorts:
+            user = self.create_user_model(usershort.dict())
             users_set.add(user.id)  # сохраняем id, потому что пони не умеет передавать объекты в разных db_session
 
         return users_set
@@ -149,7 +148,7 @@ class InstaClient(Client):
     @db_session
     def update_user(self, user, fullinfo=False):
         """Обновление пользователя в БД"""
-        user_id = self._get_correct_user_id(user)
+        user_id = int(self._get_correct_user_id(user))
 
         # получаем пользователя из БД
         db_user = User.get(id=user_id)
@@ -163,6 +162,20 @@ class InstaClient(Client):
         upd_user = {key: val for key, val in upd_user.items() if key in self.FIELDS and val}
         db_user.set(**upd_user)
 
+    def get_userinfo(self, user: str) -> dict:
+        """
+        Простой публичный способ получения инфы юзера
+
+        может не работать, поэтому лучше использовать user_info
+
+        """
+        username = user if isinstance(user, str) and not user.isdigit() else self.username_from_user_id(user)
+        response = requests.get(f'https://www.instagram.com/{username}/?__a=1')
+        userinfo = response.json()['graphql']['user']
+        pk = userinfo['id']
+        userinfo = {key: val for key, val in userinfo.items() if key in self.FIELDS and val}
+        userinfo['id'] = int(pk)
+        return userinfo
 
     @db_session
     def make_relations_snap(self, snap_owner, users_set1, users_set2=None, relation_type='followers'):
@@ -180,7 +193,7 @@ class InstaClient(Client):
         :param relation_type: возможные варианты: 'followers', 'following', 'all'
         :return:
         """
-        snap_owner = self._get_correct_user_id(snap_owner)
+        snap_owner = int(self._get_correct_user_id(snap_owner))
         logger.info(f'Пользователь id = {snap_owner}. Достаём его из БД или создаём...')
 
         # ищем в базе по id пользователя, для которого создаётся снап
@@ -217,10 +230,10 @@ class InstaClient(Client):
         self.update = update
 
         # получаем список подписчиков
-        # придёт словарь с полной инфой о подписчиках вида
-        # {'987654321': UserShort(pk='123456789', username='user_name', full_name='Имя', ... ), ... }
+        # придёт список с инфой о подписчиках вида
+        # [UserShort(pk='123456789', username='user_name', full_name='Имя', ... ), ... ]
         logger.info(f'Получаем подписчиков пользователя {user}...')
-        followers = self.user_followers(user_id)
+        followers = self.user_followers_v1(user_id)
         logger.info(f'Получено {len(followers)} подписчиков')
 
         if not followers:
@@ -262,6 +275,7 @@ class InstaClient(Client):
         filename = f'{user}_{relation_type}_{now}.txt'
         with open(f'inst/{filename}', 'w+') as f:
             for s in users:
+                s = s.pk
                 f.write(s+'\n')
                 counter += 1
 
