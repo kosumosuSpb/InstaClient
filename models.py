@@ -51,6 +51,9 @@ class User(db.Entity):
         if prev_username != new_username:
             self.last_username = prev_username
 
+    def __repr__(self):
+        return f'User[{self.id}: {self.username}]'
+
 
 class RelationshipsSnap(db.Entity):
     id = PrimaryKey(int, auto=True)

@@ -15,6 +15,7 @@ https://www.instagram.com/{username}/?__a=1
 
 from instagrapi import Client, exceptions
 from config import INST_LOGIN, INST_PASS, PROXY
+from time import sleep
 from datetime import datetime  # импортируется вместе с моделями
 from pony.orm import desc  # импортируется вместе с моделями
 from pony.orm.core import ObjectNotFound  # импортируется вместе с моделями
@@ -467,8 +468,45 @@ class InstaClient(Client):
     def take_file_dump(self):
         """Принимает файл дампа подписчиков"""
 
-    def find_mutual_followers(self, user1, user2, using_db=True):
-        """Находит общих подписчиков между двумя пользователями"""
+    def find_mutual_followers(self, *users):
+        """
+        Ищет общих подписчиков для введённых ников или id (только вывод общих, без сохранения)
+
+        В реальности плохо работает, если у пользователей больше 5000 подписчиков
+        почему-то в этом случае выбрасывает статус 560.
+
+        :param users: список юзернеймов или id
+        :return: список общих подписчиков
+        """
+        # сначала находим id введённых ников (если введены не id)
+        logger.info(f"Ищем общих подписчиков для {', '.join(users)}")
+        logger.info('Получаем id пользователей...')
+        users_ids = [self._get_correct_user_id(user) for user in users]
+
+        # находим подписчиков по очереди для каждого введённого пользователя
+        # и добавляем в общий список. Так у нас будет список списков юзершотов
+        logger.info('Получаем подписчиков для каждого пользователя...')
+        usershorts_list = []
+
+        for user_id in users_ids:
+            followers = self.user_followers_v1(user_id)
+
+            # теперь берём только id, т.к. потом intersection не будет работать для UserShort
+            followers_ids = [u.pk for u in followers]
+            usershorts_list.append(followers_ids)
+            sleep(2)
+
+        # Находим пересечения
+        # (первый элемента списка делаем множеством, остальные срезом со второго элемента распаковываем)
+        logger.info('Ищем пересечения...')
+        mutual_followers = set(usershorts_list[0]).intersection(*usershorts_list[1:])
+        logger.info('Получаем юзернеймы...')
+        mutual_followers = self.get_usernames(list(mutual_followers))
+
+        logger.info(f"Общие подписчики пользователей {', '.join(users)}: {mutual_followers}")
+
+        return mutual_followers
+
 
     def txt_to_db_snap(self, user: str, file: str = 'last', relation_type: str = 'followers'):
         """
